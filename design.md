@@ -37,7 +37,7 @@ lib/
 ├── database/
 │   └── app_database.dart        # Drift DB定義（全テーブルをまとめる）
 ├── features/
-│   ├── transaction/              # 取引一覧・追加・編集
+│   ├── transaction/              # 支出一覧・追加・編集
 │   │   ├── data/
 │   │   ├── domain/
 │   │   └── presentation/
@@ -71,8 +71,10 @@ Drift（SQLite）で以下の4テーブルを定義する。
 | id | INTEGER | PRIMARY KEY AUTOINCREMENT | |
 | name | TEXT | NOT NULL | カテゴリ名 |
 | default_necessity | TEXT | NOT NULL | `necessary`（必要）/ `wasteful`（浪費） |
-| sort_order | INTEGER | NOT NULL | 表示順 |
+| sort_order | INTEGER | NOT NULL | 表示順。カテゴリ管理画面のドラッグ&ドロップ操作で更新される |
 | created_at | DATETIME | NOT NULL | |
+
+`sort_order`はカテゴリ管理画面での表示順と、取引の登録・編集フォームのカテゴリ選択チップの並び順に使う。月次サマリーのカテゴリ別内訳（支出金額の多い順で表示、7.2節）には使用しない。
 
 初期データ（アプリ初回起動時に投入、ユーザーは追加・編集・削除可能）:
 
@@ -129,9 +131,11 @@ Drift（SQLite）で以下の4テーブルを定義する。
 | id | INTEGER | PRIMARY KEY | 常に`1`固定（単一行のみ） |
 | self_name | TEXT | NOT NULL, DEFAULT `自分` | 「自分」の表示名 |
 | partner_name | TEXT | NOT NULL, DEFAULT `相手` | 「同棲相手」の表示名 |
+| default_split_type | TEXT | NOT NULL, DEFAULT `none` | 新規取引登録時に最初から選択されている折半/立替/空白フラグ。`none`/`split`/`advance` |
 
-- 設定画面でこの2つの値を編集できる（7.2節）。
+- 設定画面でこれらの値を編集できる（7.2節）。
 - `transactions.payer` は内部的に `self` / `partner` の固定値で保持し、画面表示のときだけこのテーブルの`self_name` / `partner_name`に置き換える。名前を変更しても過去データの`payer`値（`self`/`partner`）は変わらないため、精算ロジック（5章）への影響はない。
+- `default_split_type` は新規登録フォームの初期値としてのみ使う。登録の都度、フォーム上で変更可能で、登録済み取引の`split_type`には影響しない。
 
 ## 4. バックアップ設計
 
@@ -201,13 +205,13 @@ balance == 0 → 精算不要
 
 ```
 BottomNavigationBar
-├── ① 取引一覧（ホーム）  route: /transactions
+├── ① 支出一覧（ホーム）  route: /transactions
 ├── ② 精算                route: /settlement
 ├── ③ サマリー（月次/年次切替） route: /summary
 └── ④ 設定                route: /settings
          └── カテゴリ管理  route: /settings/categories
 
-FAB（① 取引一覧タブに表示）
+FAB（① 支出一覧タブに表示）
 ├── 「レシートで登録」 → /transactions/scan
 └── 「手入力で登録」   → /transactions/new
 ```
@@ -216,13 +220,13 @@ FAB（① 取引一覧タブに表示）
 
 | 画面 | ルート | 概要 |
 |---|---|---|
-| 取引一覧 | `/transactions` | 日付降順で取引をリスト表示。タップで編集画面へ。長押しまたはスワイプで削除（確認ダイアログ表示） |
-| 取引追加・編集 | `/transactions/new`, `/transactions/:id/edit` | 日付・支払先(オートコンプリート付)・カテゴリ・金額・折半/立替/空白・支払者(常時表示、フラグに関わらず選択可)・必要/浪費(カテゴリ選択時にデフォルト自動反映、上書き可) を入力するフォーム |
+| 支出一覧 | `/transactions` | 日付降順で取引をリスト表示。タップで編集画面へ。長押しまたはスワイプで削除（確認ダイアログ表示） |
+| 取引追加・編集 | `/transactions/new`, `/transactions/:id/edit` | 日付・支払先(オートコンプリート付)・カテゴリ(表示順は`categories.sort_order`に従う)・金額・折半/立替/空白(既定値は`app_settings.default_split_type`)・支払者(常時表示、フラグに関わらず選択可)・必要/浪費(カテゴリ選択時にデフォルト自動反映、上書き可) を入力するフォーム |
 | レシート撮影 | `/transactions/scan` | カメラプレビュー＋ガイド枠。撮影後、自動でOCR・パーサー処理を実行し、結果を取引追加フォームに自動入力した状態で表示（画面遷移としては取引追加画面の事前入力版） |
-| 精算 | `/settlement` | 現在の負債状況（「相手 → 自分 ¥XXXX」等、名前は`app_settings`の表示名を使用）を表示。対象となっている未精算取引の一覧も表示。「精算する」ボタンで精算実行（確認ダイアログあり）。過去の精算履歴一覧も表示 |
+| 精算 | `/settlement` | 現在の負債状況（「相手 → 自分 ¥XXXX」等、名前は`app_settings`の表示名を使用）を表示。対象となっている未精算取引を日付の古い順に一覧表示。「精算する」ボタンで精算実行（確認ダイアログあり）。過去の精算履歴一覧も表示 |
 | サマリー | `/summary` | 画面上部で「月次/年次」を切り替えるセグメントコントロールと期間送り(前後の月・年へ移動)を用意。選択期間のカテゴリ別支出割合をドーナツ円グラフ(fl_chart)＋凡例で表示し、「必要/浪費」の合計金額・比率も表示する |
-| 設定 | `/settings` | 自分・同棲相手の表示名を編集する項目、カテゴリ管理画面への導線、バックアップ状態の説明表示、アプリ情報 |
-| カテゴリ管理 | `/settings/categories` | カテゴリの一覧・追加・編集（名称・デフォルト必要度）・削除 |
+| 設定 | `/settings` | 自分・同棲相手の表示名の編集、新規登録時の折半/立替/空白の既定値設定、カテゴリ管理画面への導線、バックアップ状態の説明表示、アプリ情報 |
+| カテゴリ管理 | `/settings/categories` | カテゴリの一覧・追加・編集（名称・デフォルト必要度）・削除。ドラッグ&ドロップで並び替え可能（`ReorderableListView`、並び替え結果は`sort_order`に反映） |
 
 ## 8. テスト方針
 
